@@ -1,0 +1,255 @@
+---
+title: "Final Project: AirBnb Predictions"
+author: "Julie Kim"
+date: "04/30/2019"
+output:
+  word_document: default
+  html_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r, message = FALSE, warning = FALSE}
+library(tidyverse)
+library(pander)
+library(dplyr)
+library(geosphere)
+```
+
+
+###Introduction
+
+Your final project concerns various prediction tasks on AirBnB data from 
+listings in Seattle. The data is from the following website:
+http://insideairbnb.com/get-the-data.html.
+
+We are interested in understanding the dataset better through the lens of 
+classification/regression/clustering algorithms:
+1. 
+   
+###Task 1: Price Prediction
+
+We would like to predict the Price for listings. A natural use case for this 
+regressor would be in helping people price new listings. This task uses  
+file `price.csv`.
+
+1. Data exploration and pre-processing.
+    ```{r}
+    price = read.csv("price.csv")
+    dim(price)
+    
+    # is the data free of NA's
+    all(!is.na(price))
+    
+    # convert `host_is_superhost` to discrete numeric
+      # f: 0
+      # t: 1
+    price$host_is_superhost = ifelse(price$host_is_superhost == "t", 1, 0)
+    
+    # convert `host_response_rate` to numeric in (0, 1)
+    price$host_response_rate = gsub("%", "", as.character(price$host_response_rate)) %>% 
+      as.numeric()/100
+    
+    # convert `host_response_time` to discrete numeric
+      # within an hour: 0
+      # within a few hours: 1
+      # within a day: 3
+      # a few days or more: 4
+    num = ifelse(price$host_response_time == "within an hour", 0, 1)
+    num[price$host_response_time == "within a day"] = 2
+    num[price$host_response_time == "a few days or more"] = 3
+    price$host_response_time = num
+    
+    # convert `host_identity_verified` to discrete numeric
+      # f: 0
+      # t: 1
+    price$host_identity_verified = ifelse(price$host_identity_verified == "t", 1, 0)
+    
+    # convert `latitude` and `longitude` to distance to the landmarks below
+    # distance in meters
+      # Downtown Seattle (Pike Place Market)
+      # Seattle-Tacoma International Airport
+    # omit `latitude`, `longitude`, and `neighbourhood_group_cleansed`
+    SEA.lat = 47.4502499
+    SEA.lon = -122.3438354
+    PP.lat = 47.6097199
+    PP.lon = -122.3465703
+    SEA = numeric()
+    PP = numeric()
+    for (i in 1:nrow(price)) {
+      SEA[i] = distm(c(price$longitude[i], price$latitude[i]), 
+                     c(SEA.lon, SEA.lat), fun = distHaversine)
+      PP[i] = distm(c(price$longitude[i], price$latitude[i]),
+                     c(PP.lon, PP.lat), fun = distHaversine)
+    }
+    price$Airport = SEA
+    price$Downtown = PP
+    price = price[,!(colnames(price) %in% c("latitude", "longitude", 
+                                           "neighbourhood_group_cleansed"))]
+    
+    # convert `property_type` to discrete numeric
+      # Apartment: 0
+      # House: 1
+      # Serviced: 2
+      # Rustic: 3
+      # Other: 4
+    num = ifelse(price$property_type %in% c("Apartment", "Condominium", "Loft"), 
+                 0, 3)
+    num[price$property_type %in% c("House", "Townhouse", "Guesthouse",
+                                   "Bungalow", "Cottage", "Cabin", "Villa")] = 1
+    num[price$property_type %in% c("Guest suite", "Serviced apartment", 
+                                   "Aparthotel", "Bed and breakfast",
+                                   "Boutique hotel", "Resort", "Hostel")] = 2
+    price$property_type = num
+    
+    # convert `room_type` to discrete numeric
+      # Entire home/apt: 0
+      # Private room: 1
+      # Shared room: 2
+    num = ifelse(price$room_type == "Entire home/apt", 0, 1)
+    num[price$room_type == "Shared room"] = 2
+    price$room_type = num
+    
+    # replace `bathrooms`, `bedrooms`, and `beds`, with guests-per metrics
+    # omit `guests_included`
+    price$bathrooms = price$guests_included/price$bathrooms
+    price$bedrooms = price$guests_included/price$bedrooms
+    price$beds = price$guests_included/price$beds
+    price = price[,!(colnames(price) == "guests_included")]
+    
+    # convert `bed_type` to discrete numeric
+      # Real Bed: 0
+      # Futon: 1
+      # Pull-out Sofa: 2
+      # Airbed: 3
+      # Couch: 4
+    num = ifelse(price$bed_type == "Real Bed", 0, 1)
+    num[price$bed_type == "Pull-out Sofa"] = 2
+    num[price$bed_type == "Airbed"] = 3
+    num[price$bed_type == "Couch"] = 4
+    price$bed_type = num
+    
+    # convert `amenities` to number of amenities
+    price$amenities = strsplit(as.character(price$amenities), ",") %>%
+      sapply(length)
+    
+    # convert `cleaning fee` to numeric
+    split = strsplit(as.character(price$cleaning_fee), c("\\$")) %>%
+      sapply(function(x) return(x[2]))
+    num = as.numeric(gsub(",", "", split))
+    price$cleaning_fee = num
+    
+    # convert `instant_bookable` to discrete numeric
+      # f: 0
+      # t: 1
+    price$instant_bookable = ifelse(price$instant_bookable == "t", 1, 0)
+    
+    # convert `cancellation_policy` to discrete numeric
+      # strict_14_with_grace_period: 0
+      # moderate: 1
+      # strict: 2
+      # flexible: 3
+      # super_strict_30: 4
+      # super_strict_60: 5
+    num = ifelse(price$cancellation_policy == "strict_14_with_grace_period", 0, 1)
+    num[price$cancellation_policy == "strict"] = 2
+    num[price$cancellation_policy == "flexible"] = 3
+    num[price$cancellation_policy == "super_strict_30"] = 4
+    num[price$cancellation_policy == "super_strict_60"] = 5
+    price$cancellation_policy = num
+    
+    # convert `price` to numeric
+    split = strsplit(as.character(price$price), c("\\$")) %>%
+      sapply(function(x) return(x[2]))
+    num = as.numeric(gsub(",", "", split))
+    price$price = num
+    ```
+    ```{r}
+    head(price)
+    ```
+
+2. Building and validation of predictive algorithms. 
+
+3. Actual submission to a prediction contest.
+
+4. Some follow-up analysis of your results. 
+
+5. Two (optional) extra-credit exercises.
+
+
+###Task 2: Review Classifier
+
+Each AirBnB listing also has a review score. I have discretized this variable 
+into two classes {0, 1} corresponding to {undesirable, desirable}. Our goal will 
+be to design a classifier for this variable. Use the file `review.csv`.
+
+1. Data exploration and pre-processing.
+
+2. Building and validation of predictive algorithms. 
+
+3. Actual submission to a prediction contest.
+
+4. Some follow-up analysis of your results. 
+
+5. Two (optional) extra-credit exercises.
+
+
+###More details
+
+Download the files price.csv and review.csv from canvas and load them into 
+your R session. This is the data that you will use for model building. 
+Your prediction targets are the price variable, and the review scores rating 
+variable.
+
+Data pre-processing: You will need to do some pre-processing of your data. 
+Particularly, consider appropriately encoding the categorical variables (and 
+possibly drop/combine some of the categories). You will also need to turn the 
+longitude-latitude features into a more useful form. One way to do this is by 
+creating new features corresponding to the distance to popular landmarks (like 
+pike place, the space needle, downtown and so on).
+
+General advice for training and tuning your predictors: Split your data into a 
+train and a validation set. Use the train set to fit and the validation set to 
+evaluate and select a good model. Use small subsets of the data initially until 
+you get a feeling for what works and what does not.
+
+I have also provided you with a test set for each task. Using an external source 
+to obtain the labels for the test set and using this to tune your model is 
+considered cheating. Do not do this.
+
+
+###Making predictions
+
+How can you make your predictions? You can use any of the techniques we have 
+discussed in class. You can use any of the variables in the data set, and you 
+can also consider constructing new variables by combining or transforming the 
+variables that are present in the data set. You should not use external 
+information sources for this project.
+
+
+###Submitting predictions
+
+You will submit a single RData file with your predictions. This file should 
+contain the following variables:
+1. price.guesses: A single vector of price estimates. This vector should be as 
+   long as the number of test cases in price test.csv (and in the same order).
+2. price.mse: A single number indicating your best guess at the mean squared 
+   error for your predictions on the test set. This will give us an idea of how 
+   well your validation has worked in setting your expectations. Good estimation 
+   of your performance is one goal of the project.
+3. review.guesses: A single binary {0,1} vector of predictions of whether the 
+   test listings are undesirable or desirable. This vector should be as long as 
+   the number of test cases in review binary test.csv (and in the same order).
+4. review.acc: A single number indicating your best guess at the 0/1 error for 
+   your predictions on the test set.
+5. team.name: A string with your team’s name. These will be revealed in class, 
+   so make it anonymous if you wish. Your report will link the team name to 
+   individual names for grading purposes.
+   
+To make this file, if you have the appropriate variables in your workspace, you 
+can type `save(list=c("price.guesses","price.mse","review.guesses", "review.acc", "team.name"),file="stat462final.RData")`
+This will create stat462final.RData file, which you can upload on canvas. 
+(Please rename the file to include your team name before sending.)
+
