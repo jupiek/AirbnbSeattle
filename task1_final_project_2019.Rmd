@@ -15,20 +15,25 @@ knitr::opts_chunk$set(echo = TRUE)
 library(tidyverse)
 library(pander)
 library(dplyr)
+library(pander)
 library(geosphere)
+library(glmnet)
+library(randomForest)
 ```
 
 
 ###Introduction
 
-Your final project concerns various prediction tasks on AirBnB data from 
-listings in Seattle. The data is from the following website:
-http://insideairbnb.com/get-the-data.html.
+This project concerns various prediction tasks on AirBnB data from listings in 
+Seattle (http://insideairbnb.com/get-the-data.html). We are interested in 
+understanding the dataset better through the lens of classification, regression,
+and clustering algorithms.
 
-We are interested in understanding the dataset better through the lens of 
-classification/regression/clustering algorithms:
-1. 
-   
+It is acceptable if the write-up is divided into 2 sections, Classification and 
+Regression. And then within that, there should be individual introduction, 
+exploration, supervised analysis, and results subsections.
+
+
 ###Task 1: Price Prediction
 
 We would like to predict the Price for listings. A natural use case for this 
@@ -38,10 +43,9 @@ file `price.csv`.
 1. Data exploration and pre-processing.
     ```{r}
     price = read.csv("price.csv")
-    dim(price)
-    
     # is the data free of NA's
     all(!is.na(price))
+    dim(price)
     
     # convert `host_is_superhost` to discrete numeric
       # f: 0
@@ -112,13 +116,6 @@ file `price.csv`.
     num[price$room_type == "Shared room"] = 2
     price$room_type = num
     
-    # replace `bathrooms`, `bedrooms`, and `beds`, with guests-per metrics
-    # omit `guests_included`
-    price$bathrooms = price$guests_included/price$bathrooms
-    price$bedrooms = price$guests_included/price$bedrooms
-    price$beds = price$guests_included/price$beds
-    price = price[,!(colnames(price) == "guests_included")]
-    
     # convert `bed_type` to discrete numeric
       # Real Bed: 0
       # Futon: 1
@@ -136,8 +133,9 @@ file `price.csv`.
       sapply(length)
     
     # convert `cleaning fee` to numeric
-    split = strsplit(as.character(price$cleaning_fee), c("\\$")) %>%
-      sapply(function(x) return(x[2]))
+    split = ifelse(price$cleaning_fee == 0, 0, 
+                   strsplit(as.character(price$cleaning_fee), c("\\$")) %>%
+                     sapply(function(x) return(x[2])))
     num = as.numeric(gsub(",", "", split))
     price$cleaning_fee = num
     
@@ -165,14 +163,280 @@ file `price.csv`.
       sapply(function(x) return(x[2]))
     num = as.numeric(gsub(",", "", split))
     price$price = num
-    ```
-    ```{r}
-    head(price)
+    
+    # omit `X` and `id`
+    price = price[,!(colnames(price) %in% c("X", "id"))]
+    dim(price)
     ```
 
 2. Building and validation of predictive algorithms. 
+    
+    Split
+    ```{r}
+    set.seed(100)
+    # split `price` into training and validation sets, 75/25
+    i = sample(1:nrow(price), nrow(price)*0.25)
+    train = price[-i,]
+    validation = price[i,]
+    
+    # construct matrix x and response y for model fit
+    x = model.matrix(price ~ . - 1, train)
+    y = train$price
+    x.val = model.matrix(price ~ . - 1, validation)
+    y.val = validation$price
+    ```
+    
+    Logistic Regression
+    ```{r}
+    set.seed(100)
+    lg.mdl = glm(price ~ ., data = train, family = gaussian)
+    # predictions on the validation data
+    lg.pred.t = predict(lg.mdl, train)
+    lg.pred.v = predict(lg.mdl, validation)
+    # MSE
+    lg.mse.t = mean((y-lg.pred.t)^2)
+    lg.mse.v = mean((y.val-lg.pred.v)^2)
+    # predictions vs. observations
+    plot(y.val, lg.pred.v, 
+         main = "Model Predictions vs. True Observations",
+         xlab = "Price", ylab = "Predictions")
+    ```
+    
+    Shrinkage Methods
+    ```{r}
+    set.seed(100)
+    ### Lasso ###
+    lasso.mdl = cv.glmnet(x, y, family = "gaussian", alpha = 1)
+    # minimizing lambda
+    lasso.mdl$lambda.min
+    # model coefficients
+    # coef(lasso.mdl)
+    # predictions on the validation data
+    lasso.pred.t = predict(lasso.mdl, x)
+    lasso.pred.v = predict(lasso.mdl, x.val)
+    # MSE
+    lasso.mse.t = mean((y-lasso.pred.t)^2)
+    lasso.mse.v = mean((y.val-lasso.pred.v)^2)
+    # predictions vs. observations
+    plot(y.val, lasso.pred.v, 
+         main = "Model Predictions vs. True Observations",
+         xlab = "Price", ylab = "Predictions")
+    
+    ### Ridge ###
+    ridge.mdl = cv.glmnet(x, y, family = "gaussian", alpha = 0)
+    # minimizing lambda
+    ridge.mdl$lambda.min
+    # model coefficients
+    # coef(ridge.mdl)
+    # predictions on the validation data
+    ridge.pred.t = predict(ridge.mdl, x)
+    ridge.pred.v = predict(ridge.mdl, x.val)
+    # MSE
+    ridge.mse.t = mean((y-ridge.pred.t)^2)
+    ridge.mse.v = mean((y.val-ridge.pred.v)^2)
+    # predictions vs. observations
+    plot(y.val, ridge.pred.v, 
+         main = "Model Predictions vs. True Observations",
+         xlab = "Price", ylab = "Predictions")
+    
+    ### Elastic Net ###
+    en.mdl = cv.glmnet(x, y, family = "gaussian", alpha = 0.2)
+    # minimizing lambda
+    en.mdl$lambda.min
+    # model coefficients
+    # coef(ridge.mdl)
+    # predictions on the validation data
+    en.pred.t = predict(en.mdl, x)
+    en.pred.v = predict(en.mdl, x.val)
+    # MSE
+    en.mse.t = mean((y-en.pred.t)^2)
+    en.mse.v = mean((y.val-en.pred.v)^2)
+    # predictions vs. observations
+    plot(y.val, en.pred.v, 
+         main = "Model Predictions vs. True Observations",
+         xlab = "Price", ylab = "Predictions")
+    ```
+    
+    Random Forest
+    ```{r}
+    set.seed(100)
+    #diagnosis for second full dataset
+    rf.mdl = randomForest(x, y, ntree = 400)
+    # predictions on the validation data
+    rf.pred.t = predict(rf.mdl, x)
+    rf.pred.v = predict(rf.mdl, x.val)
+    # MSE
+    rf.mse.t = mean((y-rf.pred.t)^2)
+    rf.mse.v = mean((y.val-rf.pred.v)^2)
+    # predictions vs. observations
+    plot(y.val, rf.pred.v, 
+         main = "Model Predictions vs. True Observations",
+         xlab = "Price", ylab = "Predictions")
+    # error vs number of trees
+    plot(rf.mdl)
+    # variable importance plot
+    varImpPlot(rf.mdl, sort = T, n.var = 10, 
+               main = "Top 10 - Variable Importance")
+    ```
+    
+    Comparison of MSE's
+    ```{r}
+    data.frame(model = c("Logistic Regression", "Lasso Regression", 
+                         "Ridge Regression", "Elastic Net Regression", 
+                         "Random Forest"), 
+               train_MSE = c(lg.mse.t, lasso.mse.t, ridge.mse.t, en.mse.t, 
+                             rf.mse.t), 
+               validation_MSE = c(lg.mse.v, lasso.mse.v, ridge.mse.v, en.mse.v, 
+                                  rf.mse.v))
+    ```
 
-3. Actual submission to a prediction contest.
+    Pre-processing of the test data
+    ```{r}
+    test = read.csv("price_test.csv")
+    # is the data free of NA's
+    all(!is.na(test))
+    dim(test)
+    
+    # convert `host_is_superhost` to discrete numeric
+      # f: 0
+      # t: 1
+    test$host_is_superhost = ifelse(test$host_is_superhost == "t", 1, 0)
+    
+    # convert `host_response_rate` to numeric in (0, 1)
+    test$host_response_rate = gsub("%", "", as.character(test$host_response_rate)) %>% 
+      as.numeric()/100
+    
+    # convert `host_response_time` to discrete numeric
+      # within an hour: 0
+      # within a few hours: 1
+      # within a day: 3
+      # a few days or more: 4
+    num = ifelse(test$host_response_time == "within an hour", 0, 1)
+    num[test$host_response_time == "within a day"] = 2
+    num[test$host_response_time == "a few days or more"] = 3
+    test$host_response_time = num
+    
+    # convert `host_identity_verified` to discrete numeric
+      # f: 0
+      # t: 1
+    test$host_identity_verified = ifelse(test$host_identity_verified == "t", 1, 0)
+    
+    # convert `latitude` and `longitude` to distance to the landmarks below
+    # distance in meters
+      # Downtown Seattle (Pike Place Market)
+      # Seattle-Tacoma International Airport
+    # omit `latitude`, `longitude`, and `neighbourhood_group_cleansed`
+    SEA.lat = 47.4502499
+    SEA.lon = -122.3438354
+    PP.lat = 47.6097199
+    PP.lon = -122.3465703
+    SEA = numeric()
+    PP = numeric()
+    for (i in 1:nrow(test)) {
+      SEA[i] = distm(c(test$longitude[i], test$latitude[i]), 
+                     c(SEA.lon, SEA.lat), fun = distHaversine)
+      PP[i] = distm(c(test$longitude[i], test$latitude[i]),
+                     c(PP.lon, PP.lat), fun = distHaversine)
+    }
+    test$Airport = SEA
+    test$Downtown = PP
+    test = test[,!(colnames(test) %in% c("latitude", "longitude", 
+                                           "neighbourhood_group_cleansed"))]
+    
+    # convert `property_type` to discrete numeric
+      # Apartment: 0
+      # House: 1
+      # Serviced: 2
+      # Rustic: 3
+      # Other: 4
+    num = ifelse(test$property_type %in% c("Apartment", "Condominium", "Loft"), 
+                 0, 3)
+    num[test$property_type %in% c("House", "Townhouse", "Guesthouse",
+                                   "Bungalow", "Cottage", "Cabin", "Villa")] = 1
+    num[test$property_type %in% c("Guest suite", "Serviced apartment", 
+                                   "Aparthotel", "Bed and breakfast",
+                                   "Boutique hotel", "Resort", "Hostel")] = 2
+    test$property_type = num
+    
+    # convert `room_type` to discrete numeric
+      # Entire home/apt: 0
+      # Private room: 1
+      # Shared room: 2
+    num = ifelse(test$room_type == "Entire home/apt", 0, 1)
+    num[test$room_type == "Shared room"] = 2
+    test$room_type = num
+    
+    # convert `bed_type` to discrete numeric
+      # Real Bed: 0
+      # Futon: 1
+      # Pull-out Sofa: 2
+      # Airbed: 3
+      # Couch: 4
+    num = ifelse(test$bed_type == "Real Bed", 0, 1)
+    num[test$bed_type == "Pull-out Sofa"] = 2
+    num[test$bed_type == "Airbed"] = 3
+    num[test$bed_type == "Couch"] = 4
+    test$bed_type = num
+    
+    # convert `amenities` to number of amenities
+    test$amenities = strsplit(as.character(test$amenities), ",") %>%
+      sapply(length)
+    
+    # convert `cleaning fee` to numeric
+    split = ifelse(test$cleaning_fee == 0, 0, 
+                   strsplit(as.character(test$cleaning_fee), c("\\$")) %>%
+                     sapply(function(x) return(x[2])))
+    num = as.numeric(gsub(",", "", split))
+    test$cleaning_fee = num
+    
+    # convert `instant_bookable` to discrete numeric
+      # f: 0
+      # t: 1
+    test$instant_bookable = ifelse(test$instant_bookable == "t", 1, 0)
+    
+    # convert `cancellation_policy` to discrete numeric
+      # strict_14_with_grace_period: 0
+      # moderate: 1
+      # strict: 2
+      # flexible: 3
+      # super_strict_30: 4
+      # super_strict_60: 5
+    num = ifelse(test$cancellation_policy == "strict_14_with_grace_period", 0, 1)
+    num[test$cancellation_policy == "strict"] = 2
+    num[test$cancellation_policy == "flexible"] = 3
+    num[test$cancellation_policy == "super_strict_30"] = 4
+    num[test$cancellation_policy == "super_strict_60"] = 5
+    test$cancellation_policy = num
+    
+    # omit `X` and `id`
+    test = test[,!(colnames(test) %in% c("X", "id"))]
+    dim(test)
+    ```
+
+    `price.guesses`: A single vector of price estimates
+    ```{r}
+    set.seed(100)
+    # construct matrix x and response y for test predictions
+    x.test = model.matrix(~ . - 1, test)
+    # predictions on the validation data
+    price.guesses = round(predict(rf.mdl, x.test), digits = 2)
+    ```
+   
+    `price.mse`: A single number indicating your best guess at the mean squared error for your predictions on the test set
+    ```{r}
+    price.mse = 6300
+    ```
+    
+    `review.guesses`: A single binary {0,1} vector of predictions of whether the test listings are undesirable or desirable. This vector should be as long as the number of test cases in review binary test.csv (and in the same order).
+
+    `review.acc`: A single number indicating your best guess at the 0/1 error for your predictions on the test set.
+    
+    `team.name`: A string with your team’s name. These will be revealed in class, so make it anonymous if you wish. Your report will link the team name to individual names for grading purposes.
+    ```{r}
+    team.name = "boolin'"
+    ```
+   
+3. Actual submission to a prediction contest
 
 4. Some follow-up analysis of your results. 
 
@@ -234,7 +498,7 @@ information sources for this project.
 You will submit a single RData file with your predictions. This file should 
 contain the following variables:
 1. price.guesses: A single vector of price estimates. This vector should be as 
-   long as the number of test cases in price test.csv (and in the same order).
+   long as the number of test cases in price_test.csv (and in the same order).
 2. price.mse: A single number indicating your best guess at the mean squared 
    error for your predictions on the test set. This will give us an idea of how 
    well your validation has worked in setting your expectations. Good estimation 
