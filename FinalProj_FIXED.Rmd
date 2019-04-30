@@ -1,0 +1,243 @@
+---
+title: "Untitled"
+author: "Audrey Cortes"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse)
+library(stringr)
+library(geosphere)
+library(e1071)
+library(rpart)
+library(randomForest)
+library(ada)
+```
+
+```{r}
+review <- read.csv("project0410/review.csv")
+```
+
+#1 Cleaning & Splitting Data
+
+## Cleaning Data & Modifying Variables
+Here I write a function to clean my data which modifies/combines/creates/eliminates variables from the original dataset and returns a new dataset with all my desired predictors.
+
+```{r, predictors generator function}
+predictors <- function(r){
+  
+  #host variables
+  responserate <-as.numeric(str_remove(r$host_response_rate, "%"))/100
+  responsetimelessday <- as.numeric(ifelse(r$host_response_time == "a few days or more", 0, 1))
+  superhost <- as.numeric(r$host_is_superhost)-1
+  verified <- as.numeric(r$host_identity_verified)-1
+  listings <- as.numeric(r$host_listings_count)
+  
+  #about the place
+  #amenities conversions
+  n_amenities <- str_count(r$amenities, ",")
+  tv <-ifelse(str_count(tolower(r$amenities), "tv") == 0, 0, 1)
+  wifi <-ifelse(str_count(tolower(r$amenities), "wifi") == 0, 0, 1)
+  kitchen <-ifelse(str_count(tolower(r$amenities), "kitchen") == 0, 0, 1)
+  heating <-ifelse(str_count(tolower(r$amenities), "heating") == 0, 0, 1)
+  refrigerator <-ifelse(str_count(tolower(r$amenities), "refrigerator") == 0, 0, 1)
+  microwave <-ifelse(str_count(tolower(r$amenities), "microwave") == 0, 0, 1)
+  parking <-ifelse(str_count(tolower(r$amenities), "parking") == 0, 0, 1)
+  washer <-ifelse(str_count(tolower(r$amenities), "washer") == 0, 0, 1)
+  dryer <-ifelse(str_count(tolower(r$amenities), "dryer") == 0, 0, 1)
+  essentials <-ifelse(str_count(tolower(r$amenities), "essentials") == 0, 0, 1)
+  shampoo <-ifelse(str_count(tolower(r$amenities), "shampoo") == 0, 0, 1)
+  stove <-ifelse(str_count(tolower(r$amenities), "stove") == 0, 0, 1)
+  #distance to aquarium - as central/tourist downtown seattle location
+  longlats <- r[,c(12, 11)]
+  distaquarium <- as.numeric(as.vector(distm(longlats, c(-122.342463, 47.607515))))
+  #description of place
+  typeproperty <- ifelse(r$property_type == "Aparthotel", "serviced", "")
+  typeproperty[which(r$property_type %in% c("Serviced apartment", "Bed and breakfast", "Boutique hotel"))] <- "serviced"
+  typeproperty[which(r$property_type %in% c("Cottage", "Bungalow", "Cabin","Guesthouse", "House", "Townhouse", "Villa"))] <- "standalone"
+  typeproperty[which(r$property_type %in% c("Yurt", "Tiny house", "Other", "Houseboat", "Boat", "Camper/RV", "Tent", "Farm stay"))] <- "weird"
+  typeproperty[which(r$property_type %in% c("Loft", "Condominium", "Apartment"))] <- "complex"
+  typeproperty[which(r$property_type %in% c("Guest suite", "Hostel", "In-law"))] <- "share"
+  typeroom <- r$room_type
+  fits <- as.numeric(r$accommodates)
+  baths <- as.numeric(r$bathrooms)
+  bedrooms <- as.numeric(r$bedrooms)
+  beds <- as.numeric(r$beds)
+  realbed <- ifelse(r$bed_type == "Real Bed", 1, 0)
+  #fees and pricing
+  split = strsplit(as.character(r$price), c("\\$")) %>%
+    sapply(function(x) return(x[2]))
+  price <- as.numeric(gsub(",", "", split))
+  #clean 0 cleaning fee to $0 cleaning fee
+  r[which(r$cleaning_fee == 0), "cleaning_fee"] = "$0.00"
+  split = strsplit(as.character(r$cleaning_fee), c("\\$")) %>%
+    sapply(function(x) return(x[2]))
+  cleanfee <- as.numeric(gsub(",", "", split))
+  #logistics
+  minnights <- as.numeric(r$minimum_nights)
+  maxnights <- as.numeric(r$maximum_nights)
+  strictcancelpol <- ifelse(r$cancellation_policy == "flexible", 0, 1)
+  strictcancelpol[r$cancellation_policy == "moderate"] <- 0
+  #put predictors in dataframe and return
+  df <- data.frame(responserate = responserate, responsetimelessday = responsetimelessday, superhost = superhost, verified = verified, listings = listings, n_amenities = n_amenities, tv = tv, wifi = wifi, kitchen = kitchen, heating = heating, refrigerator = refrigerator, microwave = microwave, parking = parking, washer = washer, dryer = dryer, essentials = essentials, shampoo = shampoo, stove = stove, distaquarium = distaquarium, typeproperty = typeproperty, typeroom = typeroom, fits = fits, baths = baths, bedrooms = bedrooms, beds = beds, realbed = realbed, price = price, cleanfee = cleanfee, minnights = minnights, maxnights = maxnights, strictcancelpol = strictcancelpol)
+  return(df)
+}
+```
+
+## Splitting the Data
+
+Shuffling the data and splitting the data into 75% training, and 25% testing. Also reporting the rate of naive prediction, that is guessing the most common class.
+
+```{r, binding score and splitting data into train & test}
+preds <- predictors(review)
+score <- data.frame(score = review$review_scores_rating)
+review.new <- cbind.data.frame(score, preds)
+set.seed(1000)
+shuffle <- review.new[sample.int(nrow(review.new),nrow(review.new)),]
+train <- shuffle[1:3032,]
+test <- shuffle[3033:nrow(shuffle),]
+#naive classification, pick most common class
+misclas.naive <- length(which(test$score == 0))/length(test$score)
+misclas.naive
+```
+
+
+#Model Selection
+
+I am testing a variety of models on the training set and returning misclassification error on the test set.
+
+##Logistic Binomial
+
+```{r, logistic model}
+#logistic model
+log1 <- glm(score ~., data = train, family = "binomial")
+pred.log1 <- ifelse(predict(log1, newdata = test, type = "response") < .5, 0, 1)
+misclass.log1 <- sum(as.numeric(pred.log1 != test$score), na.rm = T)/length(na.omit(pred.log1))
+misclass.log1
+```
+
+
+##Support Vector Machines
+
+Ran with 5 kernels: linear, radial, polynomial with k = {2,3,4}
+
+```{r, svms}
+#support vector machines 
+#linear boundary
+svm.lin <- svm(score ~., type = "C-classification", data = train, kernel = "linear")
+pred.svm.lin <- predict(svm.lin, newdata = test)
+misclas.svm.lin <- sum(as.numeric(pred.svm.lin != na.omit(test)$score))/length(pred.svm.lin)
+misclas.svm.lin
+#radial boundary
+svm.rad <- svm(score ~., type = "C-classification", data = train, kernel = "radial")
+pred.svm.rad <- predict(svm.rad, newdata = test)
+misclas.svm.rad <- sum(as.numeric(pred.svm.rad != na.omit(test)$score))/length(pred.svm.rad)
+misclas.svm.rad
+#k = 2 polynomial boundary
+svm.pol2 <- svm(score ~., type = "C-classification", data = train, kernel = "polynomial", degree = 2)
+pred.svm.pol2 <- predict(svm.pol2, newdata = test)
+misclas.svm.pol2 <- sum(as.numeric(pred.svm.pol2 != na.omit(test)$score))/length(pred.svm.pol2)
+misclas.svm.pol2
+#k = 3 polynomial boundary
+svm.pol3 <- svm(score ~., type = "C-classification", data = train, kernel = "polynomial", degree = 3)
+pred.svm.pol3 <- predict(svm.pol3, newdata = test)
+misclas.svm.pol3 <- sum(as.numeric(pred.svm.pol3 != na.omit(test)$score))/length(pred.svm.pol3)
+misclas.svm.pol3
+#k = 4 polynomial boundary
+svm.pol4 <- svm(score ~., type = "C-classification", data = train, kernel = "polynomial", degree = 4)
+pred.svm.pol4 <- predict(svm.pol4, newdata = test)
+misclas.svm.pol4 <- sum(as.numeric(pred.svm.pol4 != na.omit(test)$score))/length(pred.svm.pol4)
+misclas.svm.pol4
+```
+
+##Decision Trees
+
+Reporting error on full and pruned tree.
+
+```{r, trees}
+#basic tree
+tree1 <- rpart(score ~ ., data = train)
+pred.tree1 <- ifelse(predict(tree1, newdata = test) > .5, 1, 0)
+misclas.tree1 <- sum(pred.tree1 != test$score)/length(pred.tree1)
+misclas.tree1
+#pruned tree
+#plotcp(tree1) #used to determine where to prune
+tree2 <- prune(tree1, 0.014)
+pred.tree2 <- ifelse(predict(tree2, newdata = test) > .5, 1, 0)
+misclas.tree2 <- sum(pred.tree2 != test$score)/length(pred.tree2)
+misclas.tree2 
+```
+
+##Random Forests
+
+Did random forest with score as a factor, then with score as numeric and bounded the responses.
+
+```{r, random forests, warning = F, message = F}
+#regular random forest score as factor
+set.seed(1000)
+rf1.factor <- randomForest(factor(score) ~., data = na.omit(train))
+pred.rf1.factor <- predict(rf1.factor, newdata = na.omit(test))
+misclas.rf1.f <- sum(pred.rf1.factor != na.omit(test)$score)/length(pred.rf1.factor)
+misclas.rf1.f
+#score not as factor, predict as bounded probabilities
+set.seed(1000)
+rf1 <- randomForest(score ~., data = train)
+pred.rf1 <- ifelse(predict(rf1, newdata = test) > .5, 1, 0)
+misclas.rf1 <- sum(pred.rf1 != test$score)/length(pred.rf1)
+misclas.rf1
+```
+
+##Adaptive Boosting
+
+Performed boosting first with exponential loss, then with logistic loss.
+
+```{r, AdaBoost}
+#exponential loss
+library(ada)
+set.seed(1000)
+ada1 <- ada(score ~., data = train, loss = "exponential")
+pred.ada1 <- predict(ada1, newdata = test, type = "vector")
+misclas.ada1 <- sum(pred.ada1 != test$score)/length(test$score)
+misclas.ada1
+#logistic loss
+set.seed(1000)
+ada2 <- ada(score ~., data = train, loss = "logistic")
+pred.ada2 <- predict(ada2, newdata = test, type = "vector")
+misclas.ada2 <- sum(pred.ada2 != test$score)/length(test$score)
+misclas.ada2 #(smaller than exponential)
+
+
+```
+
+##Model Selection
+
+I am selecting the non-factor random forest.
+
+#Prediction
+
+Reading in data, predicting. Best guess at error is misclassification rate of model on test set.
+
+```{r, generating review.guesses and review.acc}
+#generating predictions with the balanced random forest model
+review.test <- read.csv("project0410/review_test.csv")
+test.dat <- predictors(review.test)
+review.guesses <-predict(ada1, newdata = test.dat)
+review.acc <- misclas.ada1
+
+```
+
+```{r}
+class(review.new$refrigerator)
+```
+
+
+
+
+
+
+
+
+
+
+
