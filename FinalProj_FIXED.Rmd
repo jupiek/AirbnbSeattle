@@ -227,10 +227,6 @@ review.acc <- misclas.ada1
 
 ```
 
-```{r}
-class(review.new$refrigerator)
-```
-
 
 
 
