@@ -203,7 +203,7 @@ file `price.csv`.
     ```
     
     Shrinkage Methods
-    ```{r}
+    ```{r, autodep = TRUE, cache = TRUE}
     set.seed(100)
     ### Lasso ###
     lasso.mdl = cv.glmnet(x, y, family = "gaussian", alpha = 1)
@@ -240,6 +240,19 @@ file `price.csv`.
          xlab = "Price", ylab = "Predictions")
     
     ### Elastic Net ###
+    # tune model to find best alpha value 
+    minimums = vector()
+    for(i in 1:500) {
+      ms = vector(length = 11)
+      names(ms) = seq(0, 1, by = 0.1)
+      for(a in seq(0, 1, by = 0.1)) {
+        cv.fit = cv.glmnet(x, y, family = "gaussian", alpha = a)
+        ms[a*10+1] = signif(cv.fit$cvm[which(cv.fit$lambda == cv.fit$lambda.min)], 2)
+      }
+      minimums = c(minimums, names(ms)[ms == min(ms)])
+    }
+    sort(table(as.numeric(minimums)))
+    # elastic net with optimal alpha
     en.mdl = cv.glmnet(x, y, family = "gaussian", alpha = 0.2)
     # minimizing lambda
     en.mdl$lambda.min
@@ -433,7 +446,7 @@ file `price.csv`.
     
     `team.name`: A string with your team’s name. These will be revealed in class, so make it anonymous if you wish. Your report will link the team name to individual names for grading purposes.
     ```{r}
-    team.name = "boolin'"
+    team.name = "boolin"
     ```
    
 3. Actual submission to a prediction contest
