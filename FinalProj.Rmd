@@ -1,7 +1,6 @@
 ---
 title: "Untitled"
 author: "Audrey Cortes"
-date: "4/20/2019"
 output: pdf_document
 ---
 
@@ -65,6 +64,8 @@ predictors <- function(r){
   split = strsplit(as.character(r$price), c("\\$")) %>%
     sapply(function(x) return(x[2]))
   price <- as.numeric(gsub(",", "", split))
+  #clean 0 cleaning fee to $0 cleaning fee
+  r[which(r$cleaning_fee == 0), "cleaning_fee"] = "$0.00"
   split = strsplit(as.character(r$cleaning_fee), c("\\$")) %>%
     sapply(function(x) return(x[2]))
   cleanfee <- as.numeric(gsub(",", "", split))
@@ -81,11 +82,11 @@ predictors <- function(r){
 
 
 ```{r, binding score and splitting data into train & test}
-set.seed(1000)
 preds <- predictors(review)
 score <- data.frame(score = review$review_scores_rating)
-shuffle <- cbind.data.frame(score, preds)
-shuffle <- shuffle[sample.int(nrow(shuffle),nrow(shuffle)),]
+review.new <- cbind.data.frame(score, preds)
+set.seed(1000)
+shuffle <- review.new[sample.int(nrow(review.new),nrow(review.new)),]
 train <- shuffle[1:3032,]
 test <- shuffle[3033:nrow(shuffle),]
 #naive classification, pick most common class
@@ -136,28 +137,53 @@ tree1 <- rpart(score ~ ., data = train)
 pred.tree1 <- ifelse(predict(tree1, newdata = test) > .5, 1, 0)
 misclas.tree1 <- sum(pred.tree1 != test$score)/length(pred.tree1)
 misclas.tree1
-plotcp(tree1)
 #pruned tree
 tree2 <- prune(tree1, 0.014)
-pred.tree2 <- predict(tree2, newdata = test)
+pred.tree2 <- ifelse(predict(tree2, newdata = test) > .5, 1, 0)
 misclas.tree2 <- sum(pred.tree2 != test$score)/length(pred.tree2)
-misclas.tree2 #totally misclassified lol
-
+misclas.tree2 
 ```
 
-```{r, random forest}
+```{r, random forests, warning = F, message = F}
+#regular random forest score as factor
+set.seed(1000)
+rf1.factor <- randomForest(factor(score) ~., data = na.omit(train))
+pred.rf1.factor <- predict(rf1.factor, newdata = na.omit(test))
+misclas.rf1.f <- sum(pred.rf1.factor != na.omit(test)$score)/length(pred.rf1.factor)
+misclas.rf1.f
+#score not as factor, predict as bounded probabilities
+set.seed(1000)
 rf1 <- randomForest(score ~., data = na.omit(train))
-pred.rf1 <- ifelse(predict(rf1, newdata = test) > .5, 1, 0)
-misclas.rf1 <- sum(pred.rf1 != test$score, na.rm = T)/length(na.omit(pred.rf1))
-misclas.rf1 # best one yet
+pred.rf1 <- ifelse(predict(rf1, newdata = na.omit(test)) > .5, 1, 0)
+misclas.rf1 <- sum(pred.rf1 != test$score)/length(pred.rf1)
+misclas.rf1
 ```
 
 ```{r, AdaBoost}
+#exponential loss
 library(ada)
 ada1 <- ada(score ~., data = train, loss = "exponential")
 pred.ada1 <- predict(ada1, newdata = test, type = "vector")
 misclas.ada1 <- sum(pred.ada1 != test$score)/length(test$score)
 misclas.ada1
+#logistic loss
+ada2 <- ada(score ~., data = train, loss = "logistic")
+pred.ada2 <- predict(ada2, newdata = test, type = "vector")
+misclas.ada2 <- sum(pred.ada2 != test$score)/length(test$score)
+misclas.ada2 #(smaller than exponential)
+
+
+```
+
+
+
+
+```{r, generating review.guesses and review.acc}
+#generating predictions with the balanced random forest model
+review.test <- read.csv("project0410/review_test.csv")
+test.dat <- predictors(review.test)
+review.guesses <- predict(rf1.factor, newdata = test.dat)
+review.acc <- misclas.rf1
 ```
 
 
