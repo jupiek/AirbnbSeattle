@@ -19,6 +19,11 @@ library(ada)
 review <- read.csv("project0410/review.csv")
 ```
 
+#1 Cleaning & Splitting Data
+
+## Cleaning Data & Modifying Variables
+Here I write a function to clean my data which modifies/combines/creates/eliminates variables from the original dataset and returns a new dataset with all my desired predictors.
+
 ```{r, predictors generator function}
 predictors <- function(r){
   
@@ -80,6 +85,9 @@ predictors <- function(r){
 }
 ```
 
+## Splitting the Data
+
+Shuffling the data and splitting the data into 75% training, and 25% testing. Also reporting the rate of naive prediction, that is guessing the most common class.
 
 ```{r, binding score and splitting data into train & test}
 preds <- predictors(review)
@@ -94,6 +102,13 @@ misclas.naive <- length(which(test$score == 0))/length(test$score)
 misclas.naive
 ```
 
+
+#Model Selection
+
+I am testing a variety of models on the training set and returning misclassification error on the test set.
+
+##Logistic Binomial
+
 ```{r, logistic model}
 #logistic model
 log1 <- glm(score ~., data = train, family = "binomial")
@@ -101,6 +116,11 @@ pred.log1 <- ifelse(predict(log1, newdata = test, type = "response") < .5, 0, 1)
 misclass.log1 <- sum(as.numeric(pred.log1 != test$score), na.rm = T)/length(na.omit(pred.log1))
 misclass.log1
 ```
+
+
+##Support Vector Machines
+
+Ran with 5 kernels: linear, radial, polynomial with k = {2,3,4}
 
 ```{r, svms}
 #support vector machines 
@@ -131,6 +151,10 @@ misclas.svm.pol4 <- sum(as.numeric(pred.svm.pol4 != na.omit(test)$score))/length
 misclas.svm.pol4
 ```
 
+##Decision Trees
+
+Reporting error on full and pruned tree.
+
 ```{r, trees}
 #basic tree
 tree1 <- rpart(score ~ ., data = train)
@@ -138,11 +162,16 @@ pred.tree1 <- ifelse(predict(tree1, newdata = test) > .5, 1, 0)
 misclas.tree1 <- sum(pred.tree1 != test$score)/length(pred.tree1)
 misclas.tree1
 #pruned tree
+#plotcp(tree1) #used to determine where to prune
 tree2 <- prune(tree1, 0.014)
 pred.tree2 <- ifelse(predict(tree2, newdata = test) > .5, 1, 0)
 misclas.tree2 <- sum(pred.tree2 != test$score)/length(pred.tree2)
 misclas.tree2 
 ```
+
+##Random Forests
+
+Did random forest with score as a factor, then with score as numeric and bounded the responses.
 
 ```{r, random forests, warning = F, message = F}
 #regular random forest score as factor
@@ -153,11 +182,15 @@ misclas.rf1.f <- sum(pred.rf1.factor != na.omit(test)$score)/length(pred.rf1.fac
 misclas.rf1.f
 #score not as factor, predict as bounded probabilities
 set.seed(1000)
-rf1 <- randomForest(score ~., data = na.omit(train))
-pred.rf1 <- ifelse(predict(rf1, newdata = na.omit(test)) > .5, 1, 0)
+rf1 <- randomForest(score ~., data = train)
+pred.rf1 <- ifelse(predict(rf1, newdata = test) > .5, 1, 0)
 misclas.rf1 <- sum(pred.rf1 != test$score)/length(pred.rf1)
 misclas.rf1
 ```
+
+##Adaptive Boosting
+
+Performed boosting first with exponential loss, then with logistic loss.
 
 ```{r, AdaBoost}
 #exponential loss
@@ -175,15 +208,21 @@ misclas.ada2 #(smaller than exponential)
 
 ```
 
+##Model Selection
 
+I am selecting the non-factor random forest.
 
+#Prediction
+
+Reading in data, predicting. Best guess at error is misclassification rate of model on test set.
 
 ```{r, generating review.guesses and review.acc}
 #generating predictions with the balanced random forest model
 review.test <- read.csv("project0410/review_test.csv")
 test.dat <- predictors(review.test)
-review.guesses <- predict(rf1.factor, newdata = test.dat)
+review.guesses <- ifelse(predict(rf1, newdata = test.dat) > .5, 1, 0)
 review.acc <- misclas.rf1
+
 ```
 
 
